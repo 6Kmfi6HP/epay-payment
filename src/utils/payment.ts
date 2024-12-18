@@ -29,6 +29,16 @@ interface PaymentResponse {
   urlscheme?: string;
 }
 
+interface PaymentSubmitParams {
+  pid: string;
+  type: string;
+  name: string;
+  money: string;
+  paymentMethod: PaymentMethod;
+  notify_url: string;
+  return_url: string;
+}
+
 // Debug function to show signature process
 function debugSignature(params: Record<string, string>, signStr: string, finalStr: string, sign: string) {
   console.log('Signature Debug:');
@@ -43,9 +53,9 @@ export function generateSignature(params: Record<string, string>): string {
   const sortedParams = Object.entries(params)
     .filter(([key, value]) => {
       // Exclude sign, sign_type and empty values
-      return key !== 'sign' && 
-             key !== 'sign_type' && 
-             value !== '';
+      return key !== 'sign' &&
+        key !== 'sign_type' &&
+        value !== '';
     })
     .sort(([keyA], [keyB]) => keyA.localeCompare(keyB));
 
@@ -56,7 +66,7 @@ export function generateSignature(params: Record<string, string>): string {
 
   // 3. Add merchant key
   const finalStr = signStr + import.meta.env.VITE_MERCHANT_KEY;
-  
+
   // 4. Generate MD5 hash
   const sign = md5(finalStr);
 
@@ -71,7 +81,7 @@ export function buildRequestParams<T extends Record<string, string>>(params: T):
   const formattedParams = Object.entries(params).reduce((acc, [key, value]) => {
     // Skip sign and sign_type
     if (key === 'sign' || key === 'sign_type') return acc;
-    
+
     // Include non-empty values
     if (value !== '') {
       acc[key] = value.toString();
@@ -107,7 +117,7 @@ export async function submitApiPayment(params: Omit<ApiPaymentParams, 'sign' | '
   console.log('Submitting payment with params:', baseParams);
   const signedParams = buildRequestParams(baseParams);
   console.log('Signed params:', signedParams);
-  
+
   // Convert params to URLSearchParams
   const formData = new URLSearchParams();
   Object.entries(signedParams).forEach(([key, value]) => {
@@ -118,7 +128,7 @@ export async function submitApiPayment(params: Omit<ApiPaymentParams, 'sign' | '
       formData.append(key, value);
     }
   });
-  
+
   const response = await fetch(`${import.meta.env.VITE_API_URL}/mapi.php`, {
     method: 'POST',
     headers: {
@@ -143,6 +153,52 @@ export async function submitApiPayment(params: Omit<ApiPaymentParams, 'sign' | '
   return data;
 }
 
+export async function submitPayment(params: PaymentSubmitParams): Promise<PaymentResponse> {
+  const baseParams = {
+    pid: params.pid,
+    type: params.type,
+    out_trade_no: Date.now().toString(),
+    notify_url: params.notify_url,
+    return_url: params.return_url,
+    name: params.name,
+    money: params.money
+  };
+
+  if (params.paymentMethod === 'api') {
+    const clientip = await getClientIp();
+    const device = detectDevice();
+
+    const apiParams = {
+      ...baseParams,
+      clientip,
+      device
+    };
+
+    return await submitApiPayment(apiParams);
+  } else {
+    // Page Redirect Payment
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = `${import.meta.env.VITE_API_URL}/submit.php`;
+
+    const paramsWithSign = buildRequestParams(baseParams);
+
+    // Create hidden inputs
+    Object.entries(paramsWithSign).forEach(([key, value]) => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = key;
+      input.value = value.toString();
+      form.appendChild(input);
+    });
+
+    document.body.appendChild(form);
+    form.submit();
+
+    return { code: 1 }; // Return success code for page redirect
+  }
+}
+
 export function getClientIp(): Promise<string> {
   return fetch('https://api.ipify.org?format=json')
     .then(response => response.json())
@@ -152,7 +208,7 @@ export function getClientIp(): Promise<string> {
 
 export function detectDevice(): 'pc' | 'mobile' | 'qq' | 'wechat' | 'alipay' | 'jump' {
   const ua = navigator.userAgent.toLowerCase();
-  
+
   if (/micromessenger/.test(ua)) return 'wechat';
   if (/qq/.test(ua)) return 'qq';
   if (/alipay/.test(ua)) return 'alipay';
